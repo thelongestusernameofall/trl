@@ -24,6 +24,18 @@ class ScriptArguments:
     target_modules: Optional[str] = field(default="q_proj,v_proj,k_proj,out_proj,fc_in,fc_out,wte",
                                           metadata={"help": "the target modules for DPO-lora"})
 
+    # Do not touch this type annotation or it will stop working in CLI
+    deepspeed: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": (
+                "Enable deepspeed and pass the path to deepspeed json config file (e.g. `ds_config.json`) or an already"
+                " loaded json file as a dict"
+            )
+        },
+    )
+    local_rank: int = field(default=-1, metadata={"help": "For distributed training: local_rank"})
+
     # data parameters
     beta: Optional[float] = field(default=0.1, metadata={"help": "the beta parameter for DPO loss"})
 
@@ -174,6 +186,9 @@ if __name__ == "__main__":
     # tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
     tokenizer = AutoTokenizer.from_pretrained(script_args.model_name_or_path)
     tokenizer.pad_token = tokenizer.eos_token
+
+    if script_args.deepspeed is not None and script_args.local_rank == 0:
+        model.print_trainable_parameters()
 
     # 2. Load the Stack-exchange paired dataset
     train_dataset = get_stack_exchange_paired(data_path=script_args.data_path, data_dir=script_args.data_dir,
