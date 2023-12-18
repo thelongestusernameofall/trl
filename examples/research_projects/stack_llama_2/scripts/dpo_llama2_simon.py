@@ -19,7 +19,7 @@ class ScriptArguments:
     """
     # simon-addded
     data_path: Optional[str] = field(default=None, metadata={"help": "path to the training data"})
-    data_dir: Optional[str] = field(default=None, metadata={"help": "path to the training data"})
+    data_dir: Optional[str] = field(default="data/rl", metadata={"help": "path to the training data"})
     load_in_4bit: Optional[bool] = field(default=True, metadata={"help": "whether to load in 4bit"})
     target_modules: Optional[str] = field(default="q_proj,v_proj,k_proj,out_proj,fc_in,fc_out,wte",
                                           metadata={"help": "the target modules for DPO-lora"})
@@ -105,7 +105,6 @@ def get_stack_exchange_paired(
             data_path,
             split="train",
             cache_dir=cache_dir,
-            data_dir=data_dir,
         )
     else:
         dataset = load_dataset(
