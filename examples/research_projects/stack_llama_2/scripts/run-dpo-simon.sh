@@ -13,7 +13,9 @@ target_modules="q_proj,v_proj,k_proj"
 load_in_4bit=0
 # deepspeed_config_file=ds_zero2_no_offload.json
 
-torchrun --nnodes 1 --nproc_per_node 8 dpo_llama2_simon.py \
+#torchrun --nnodes 1 --nproc_per_node 8 dpo_llama2_simon.py \
+deepspeed dpo_llama2_simon.py \
+    --deepspeed ds_zero2_gpu.json \
     --model_name_or_path ${model_name} \
     --output_dir ${output_dir} \
     --load_in_4bit ${load_in_4bit} \
