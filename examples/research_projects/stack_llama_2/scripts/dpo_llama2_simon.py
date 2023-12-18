@@ -164,14 +164,16 @@ if __name__ == "__main__":
     tokenizer.pad_token = tokenizer.eos_token
 
     # 2. Load the Stack-exchange paired dataset
-    train_dataset = get_stack_exchange_paired(data_dir=script_args.data_dir, sanity_check=script_args.sanity_check)
+    train_dataset = get_stack_exchange_paired(data_path=script_args.data_path, data_dir=script_args.data_dir,
+                                              sanity_check=script_args.sanity_check)
     train_dataset = train_dataset.filter(
         lambda x: len(x["prompt"]) + len(x["chosen"]) <= script_args.max_length
                   and len(x["prompt"]) + len(x["rejected"]) <= script_args.max_length
     )
 
     # 3. Load evaluation dataset
-    eval_dataset = get_stack_exchange_paired(data_dir="data/evaluation", sanity_check=True)
+    eval_dataset = get_stack_exchange_paired(data_path=script_args.data_path, data_dir=script_args.data_dir,
+                                             sanity_check=True)
     eval_dataset = eval_dataset.filter(
         lambda x: len(x["prompt"]) + len(x["chosen"]) <= script_args.max_length
                   and len(x["prompt"]) + len(x["rejected"]) <= script_args.max_length
