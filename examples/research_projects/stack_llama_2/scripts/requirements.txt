@@ -1,7 +1,8 @@
 transformers
-trl
 peft
 accelerate
 datasets
 bitsandbytes
 wandb
+scipy
+#trl
