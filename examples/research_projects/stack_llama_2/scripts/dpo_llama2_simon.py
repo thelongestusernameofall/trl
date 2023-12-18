@@ -11,6 +11,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, 
 from trl import DPOTrainer
 from accelerate import Accelerator
 
+
 # Define and parse arguments.
 @dataclass
 class ScriptArguments:
@@ -284,6 +285,7 @@ if __name__ == "__main__":
         max_prompt_length=script_args.max_prompt_length,
         max_length=script_args.max_length,
     )
+    print_trainable_parameters(dpo_trainer.model)
 
     # 6. train
     dpo_trainer.train()
