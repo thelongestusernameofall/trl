@@ -1,3 +1,9 @@
+#!/bin/bash
+
+unset http_proxy, https_proxy, ftp_proxy
+
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+
 model_name=/home/huangshaomang/research/AI/GPT/LLama/Vicuna/llama-2-zh/chinese-alpaca-2-13b-16k-inf1120-v17
 output_dir=/home/huangshaomang/research/AI/GPT/LLama/Vicuna/llama-2-zh/chinese-alpaca-2-13b-16k-inf1120-v17-dpov1
 data_path=/data0/research/AI/GPT/RLHF/trl/data/using
