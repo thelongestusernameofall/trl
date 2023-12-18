@@ -1,6 +1,6 @@
 #!/bin/bash
 
-unset http_proxy, https_proxy, ftp_proxy
+unset http_proxy https_proxy ftp_proxy
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
