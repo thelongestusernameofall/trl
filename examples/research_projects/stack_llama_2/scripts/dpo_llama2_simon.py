@@ -9,7 +9,7 @@ from peft import LoraConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments
 
 from trl import DPOTrainer
-
+from accelerate import Accelerator
 
 # Define and parse arguments.
 @dataclass
@@ -190,6 +190,8 @@ if __name__ == "__main__":
         load_in_4bit=script_args.load_in_4bit,
     )
     model.config.use_cache = False
+    accelerator = Accelerator()
+    model = model.to(accelerator.device)
 
     if script_args.ignore_bias_buffers:
         # torch distributed hack
