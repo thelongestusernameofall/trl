@@ -203,8 +203,10 @@ if __name__ == "__main__":
         script_args.model_name_or_path,
         low_cpu_mem_usage=True,
         torch_dtype=torch.float16,
-        load_in_4bit=True,
+        load_in_4bit=script_args.load_in_4bit,
     )
+    model_ref = model_ref.to(accelerator.device)
+
     # tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
     tokenizer = AutoTokenizer.from_pretrained(script_args.model_name_or_path)
     tokenizer.pad_token = tokenizer.eos_token
