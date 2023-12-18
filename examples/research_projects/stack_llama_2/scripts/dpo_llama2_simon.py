@@ -119,11 +119,24 @@ def get_stack_exchange_paired(
         dataset = dataset.select(range(min(len(dataset), 1000)))
 
     def return_prompt_and_responses(samples) -> Dict[str, str]:
-        return {
-            "prompt": ["Question: " + question + "\n\nAnswer: " for question in samples["question"]],
-            "chosen": samples["response_j"],
-            "rejected": samples["response_k"],
-        }
+        if "question" in samples and "response_j" in samples and "response_k" in samples:
+            return {
+                "prompt": ["Question: " + question + "\n\nAnswer: " for question in samples["question"]],
+                "chosen": samples["response_j"],
+                "rejected": samples["response_k"],
+            }
+        elif "query" in samples and "sft_answer" in samples and "model_answer" in samples:
+            return {
+                "prompt": ["Question: " + question + "\n\nAnswer: " for question in samples["query"]],
+                "chosen": samples["sft_answer"],
+                "rejected": samples["model_answer"],
+            }
+        else:
+            return {
+                "prompt": ["Question: " + question + "\n\nAnswer: " for question in samples["prompt"]],
+                "chosen": samples["chosen"],
+                "rejected": samples["rejected"],
+            }
 
     return dataset.map(
         return_prompt_and_responses,
