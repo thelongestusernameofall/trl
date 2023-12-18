@@ -17,6 +17,12 @@ class ScriptArguments:
     """
     The arguments for the DPO training script.
     """
+    # simon-addded
+    data_path: Optional[str] = field(default=None, metadata={"help": "path to the training data"})
+    data_dir: Optional[str] = field(default="data/rl", metadata={"help": "path to the training data"})
+    load_in_4bit: Optional[bool] = field(default=True, metadata={"help": "whether to load in 4bit"})
+    target_modules: Optional[str] = field(default="q_proj,v_proj,k_proj,out_proj,fc_in,fc_out,wte",
+                                          metadata={"help": "the target modules for DPO-lora"})
 
     # data parameters
     beta: Optional[float] = field(default=0.1, metadata={"help": "the beta parameter for DPO loss"})
@@ -61,8 +67,8 @@ class ScriptArguments:
         default="wandb",
         metadata={
             "help": 'The list of integrations to report the results and logs to. Supported platforms are `"azure_ml"`,'
-            '`"comet_ml"`, `"mlflow"`, `"neptune"`, `"tensorboard"`,`"clearml"` and `"wandb"`. '
-            'Use `"all"` to report to all integrations installed, `"none"` for no integrations.'
+                    '`"comet_ml"`, `"mlflow"`, `"neptune"`, `"tensorboard"`,`"clearml"` and `"wandb"`. '
+                    'Use `"all"` to report to all integrations installed, `"none"` for no integrations.'
         },
     )
     # debug argument for distributed training
@@ -70,16 +76,17 @@ class ScriptArguments:
         default=False,
         metadata={
             "help": "fix for DDP issues with LM bias/mask buffers - invalid scalar type,`inplace operation. See"
-            "https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992"
+                    "https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992"
         },
     )
 
 
 def get_stack_exchange_paired(
-    data_dir: str = "data/rl",
-    sanity_check: bool = False,
-    cache_dir: str = None,
-    num_proc=24,
+        data_path: str = None,
+        data_dir: str = "data/rl",
+        sanity_check: bool = False,
+        cache_dir: str = None,
+        num_proc=24,
 ) -> Dataset:
     """Load the stack-exchange-paired dataset from Hugging Face and convert it to the necessary format.
 
@@ -93,12 +100,20 @@ def get_stack_exchange_paired(
     Prompts are structured as follows:
       "Question: " + <prompt> + "\n\nAnswer: "
     """
-    dataset = load_dataset(
-        "lvwerra/stack-exchange-paired",
-        split="train",
-        cache_dir=cache_dir,
-        data_dir=data_dir,
-    )
+    if data_path:
+        dataset = load_dataset(
+            data_path,
+            split="train",
+            cache_dir=cache_dir,
+            data_dir=data_dir,
+        )
+    else:
+        dataset = load_dataset(
+            "lvwerra/stack-exchange-paired",
+            split="train",
+            cache_dir=cache_dir,
+            data_dir=data_dir,
+        )
     original_columns = dataset.column_names
 
     if sanity_check:
@@ -128,7 +143,7 @@ if __name__ == "__main__":
         script_args.model_name_or_path,
         low_cpu_mem_usage=True,
         torch_dtype=torch.float16,
-        load_in_4bit=True,
+        load_in_4bit=script_args.load_in_4bit,
     )
     model.config.use_cache = False
 
@@ -144,21 +159,22 @@ if __name__ == "__main__":
         torch_dtype=torch.float16,
         load_in_4bit=True,
     )
-    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
+    # tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
+    tokenizer = AutoTokenizer.from_pretrained(script_args.model_name_or_path)
     tokenizer.pad_token = tokenizer.eos_token
 
     # 2. Load the Stack-exchange paired dataset
-    train_dataset = get_stack_exchange_paired(data_dir="data/rl", sanity_check=script_args.sanity_check)
+    train_dataset = get_stack_exchange_paired(data_dir=script_args.data_dir, sanity_check=script_args.sanity_check)
     train_dataset = train_dataset.filter(
         lambda x: len(x["prompt"]) + len(x["chosen"]) <= script_args.max_length
-        and len(x["prompt"]) + len(x["rejected"]) <= script_args.max_length
+                  and len(x["prompt"]) + len(x["rejected"]) <= script_args.max_length
     )
 
     # 3. Load evaluation dataset
     eval_dataset = get_stack_exchange_paired(data_dir="data/evaluation", sanity_check=True)
     eval_dataset = eval_dataset.filter(
         lambda x: len(x["prompt"]) + len(x["chosen"]) <= script_args.max_length
-        and len(x["prompt"]) + len(x["rejected"]) <= script_args.max_length
+                  and len(x["prompt"]) + len(x["rejected"]) <= script_args.max_length
     )
 
     # 4. initialize training arguments:
@@ -182,20 +198,22 @@ if __name__ == "__main__":
         remove_unused_columns=False,
         run_name="dpo_llama2",
     )
-
+    target_modules = [
+        "q_proj",
+        "v_proj",
+        "k_proj",
+        "out_proj",
+        "fc_in",
+        "fc_out",
+        "wte",
+    ]
+    if script_args.target_modules:
+        target_modules = script_args.target_modules.split(",")
     peft_config = LoraConfig(
         r=script_args.lora_r,
         lora_alpha=script_args.lora_alpha,
         lora_dropout=script_args.lora_dropout,
-        target_modules=[
-            "q_proj",
-            "v_proj",
-            "k_proj",
-            "out_proj",
-            "fc_in",
-            "fc_out",
-            "wte",
-        ],
+        target_modules=target_modules,
         bias="none",
         task_type="CAUSAL_LM",
     )
