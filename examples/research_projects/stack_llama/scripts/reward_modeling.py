@@ -1,5 +1,19 @@
+# Copyright 2024 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Optional, Union
 
 import evaluate
 import numpy as np
@@ -15,6 +29,7 @@ from transformers import (
     Trainer,
     TrainerCallback,
     TrainingArguments,
+    set_seed,
 )
 from transformers.utils import PaddingStrategy
 
@@ -89,16 +104,23 @@ class ScriptArguments:
         default=False,
         metadata={"help": "Whether to run eval after the first step"},
     )
+    seed: Optional[int] = field(
+        default=0, metadata={"help": "Random seed that will be set at the beginning of training."}
+    )
 
 
 parser = HfArgumentParser(ScriptArguments)
 script_args = parser.parse_args_into_dataclasses()[0]
-
+set_seed(script_args.seed)
 # Load the human stack-exchange-paired dataset for tuning the reward model.
-train_dataset = load_dataset("lvwerra/stack-exchange-paired", data_dir="data/reward", split="train")
+train_dataset = load_dataset(
+    "lvwerra/stack-exchange-paired", data_dir="data/reward", split="train", verification_mode="no_checks"
+)
 if script_args.train_subset > 0:
     train_dataset = train_dataset.select(range(script_args.train_subset))
-eval_dataset = load_dataset("lvwerra/stack-exchange-paired", data_dir="data/evaluation", split="train")
+eval_dataset = load_dataset(
+    "lvwerra/stack-exchange-paired", data_dir="data/evaluation", split="train", verification_mode="no_checks"
+)
 if script_args.eval_subset > 0:
     eval_dataset = eval_dataset.select(range(script_args.eval_subset))
 # Define the training args. Needs to be done before the model is loaded if you are using deepspeed.
@@ -114,7 +136,7 @@ training_args = TrainingArguments(
     per_device_eval_batch_size=script_args.per_device_eval_batch_size,
     num_train_epochs=script_args.num_train_epochs,
     weight_decay=script_args.weight_decay,
-    evaluation_strategy="steps",
+    eval_strategy="steps",
     eval_steps=500,
     save_strategy="steps",
     save_steps=500,
@@ -129,7 +151,10 @@ training_args = TrainingArguments(
     logging_steps=10,
     optim=script_args.optim,
     lr_scheduler_type=script_args.lr_scheduler_type,
+    seed=script_args.seed,
 )
+
+
 # Load the value-head model and tokenizer.
 tokenizer_name = script_args.tokenizer_name if script_args.tokenizer_name is not None else script_args.model_name
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True)
@@ -187,7 +212,8 @@ train_dataset = train_dataset.map(
     remove_columns=original_columns,
 )
 train_dataset = train_dataset.filter(
-    lambda x: len(x["input_ids_j"]) <= script_args.max_length and len(x["input_ids_k"]) <= script_args.max_length
+    lambda x: len(x["input_ids_j"]) <= script_args.max_length and len(x["input_ids_k"]) <= script_args.max_length,
+    num_proc=num_proc,
 )
 
 eval_dataset = eval_dataset.map(
@@ -197,7 +223,8 @@ eval_dataset = eval_dataset.map(
     remove_columns=original_columns,
 )
 eval_dataset = eval_dataset.filter(
-    lambda x: len(x["input_ids_j"]) <= script_args.max_length and len(x["input_ids_k"]) <= script_args.max_length
+    lambda x: len(x["input_ids_j"]) <= script_args.max_length and len(x["input_ids_k"]) <= script_args.max_length,
+    num_proc=num_proc,
 )
 
 
@@ -206,11 +233,10 @@ eval_dataset = eval_dataset.filter(
 class RewardDataCollatorWithPadding:
     tokenizer: PreTrainedTokenizerBase
     padding: Union[bool, str, PaddingStrategy] = True
-    max_length: Optional[int] = None
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
 
-    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
         features_j = []
         features_k = []
         for feature in features:
@@ -229,14 +255,12 @@ class RewardDataCollatorWithPadding:
         batch_j = self.tokenizer.pad(
             features_j,
             padding=self.padding,
-            max_length=self.max_length,
             pad_to_multiple_of=self.pad_to_multiple_of,
             return_tensors=self.return_tensors,
         )
         batch_k = self.tokenizer.pad(
             features_k,
             padding=self.padding,
-            max_length=self.max_length,
             pad_to_multiple_of=self.pad_to_multiple_of,
             return_tensors=self.return_tensors,
         )
@@ -264,7 +288,7 @@ def compute_metrics(eval_pred):
 
 
 class RewardTrainer(Trainer):
-    # Define how to compute the reward loss. We use the InstructGPT pairwise logloss: https://arxiv.org/abs/2203.02155
+    # Define how to compute the reward loss. We use the InstructGPT pairwise logloss: https://huggingface.co/papers/2203.02155
     def compute_loss(self, model, inputs, return_outputs=False):
         rewards_j = model(input_ids=inputs["input_ids_j"], attention_mask=inputs["attention_mask_j"])[0]
         rewards_k = model(input_ids=inputs["input_ids_k"], attention_mask=inputs["attention_mask_k"])[0]
@@ -281,7 +305,7 @@ trainer = RewardTrainer(
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
     compute_metrics=compute_metrics,
-    data_collator=RewardDataCollatorWithPadding(tokenizer=tokenizer, max_length=script_args.max_length),
+    data_collator=RewardDataCollatorWithPadding(tokenizer=tokenizer),
 )
 
 

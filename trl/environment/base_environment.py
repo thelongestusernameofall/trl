@@ -1,4 +1,4 @@
-# Copyright 2022 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import re
-import warnings
+from typing import Optional
 
 import torch
 from accelerate.utils import extract_model_from_parallel
@@ -45,7 +45,7 @@ class StringStoppingCriteria(StoppingCriteria):
         done = []
 
         for i, decoded_generation in enumerate(decoded_generations):
-            sequence_complete = any([stop_string in decoded_generation for stop_string in self.stop_strings])
+            sequence_complete = any(stop_string in decoded_generation for stop_string in self.stop_strings)
             done.append(sequence_complete)
             if not sequence_complete:
                 self.generated_tokens[i] += 1
@@ -63,7 +63,7 @@ class TextHistory:
         """
         Initialize TextHistory.
 
-        args:
+        Args:
             text (`str`): The text of the first segment.
             tokens (`torch.LongTensor`): The tokens of the first segment.
             system (`bool`, *optional*): Whether the first segment is a system or user segment.
@@ -89,7 +89,7 @@ class TextHistory:
         """
         Append a new segment to the history.
 
-        args:
+        Args:
             text (`str`): The text of the new segment.
             tokens (`torch.LongTensor`): The tokens of the new segment.
             system (`bool`, *optional*): Whether the new segment is a system or user segment.
@@ -144,8 +144,10 @@ class TextHistory:
         Print the text history.
         """
         if not is_rich_available():
-            warnings.warn("install rich to display text")
-            return
+            raise ImportError(
+                "The `rich` library is required to display text with formatting. "
+                "Install it using `pip install rich`."
+            )
 
         text = Text(self.text)
         text.stylize(self.prompt_color, self.text_spans[0][0], self.text_spans[1][0])
@@ -166,8 +168,10 @@ class TextHistory:
         Print the history tokens.
         """
         if not is_rich_available():
-            warnings.warn("install rich to display tokens")
-            return
+            raise ImportError(
+                "The `rich` library is required to display tokens with formatting. "
+                "Install it using `pip install rich`."
+            )
 
         text = Text()
         prompt_end = self.token_spans[0][1]
@@ -191,8 +195,10 @@ class TextHistory:
         Print the colour legend.
         """
         if not is_rich_available():
-            warnings.warn("install rich to display colour legend")
-            return
+            raise ImportError(
+                "The `rich` library is required to display colour legends with formatting. "
+                "Install it using `pip install rich`."
+            )
         text = Text("\n\n(Colour Legend: ")
         text.append("Prompt", style=self.prompt_color)
         text.append("|")
@@ -242,7 +248,7 @@ class TextEnvironment:
         if isinstance(tools, dict):
             self.tools = tools
         else:
-            self.tools = dict([(tool.__class__.__name__, tool) for tool in tools])
+            self.tools = {tool.__class__.__name__: tool for tool in tools}
         self.reward_fn = reward_fn
         self.max_length = max_length
         self.request_token = "<request>"
@@ -277,7 +283,7 @@ class TextEnvironment:
 
         histories = [TextHistory(q, qt, system=True) for q, qt in zip(queries, queries_tokens)]
 
-        while any([not history.completed for history in histories]) and turns < self.max_turns:
+        while any(not history.completed for history in histories) and turns < self.max_turns:
             histories = self.generate(histories)
             histories = self.tasks_end_check(histories)
             # TODO: make this parallel rather than for-loop
@@ -416,12 +422,12 @@ class TextEnvironment:
         self,
         query_tensors,
         batch_size: int = 16,
-        pad_to_multiple_of: int = None,
+        pad_to_multiple_of: Optional[int] = None,
     ):
         """
         Generate responses for a list of query tensors.
 
-        args:
+        Args:
             query_tensors (list[torch.Tensor]): A list of query tensors to generate responses for.
             batch_size (int): The batch size to use for generation.
             pad_to_multiple_of (int): The padding length to use for generation.

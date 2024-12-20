@@ -1,4 +1,4 @@
-# Copyright 2023 metric-space, The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,17 +11,19 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import gc
 import unittest
 
 import torch
+from transformers.utils import is_peft_available
 
 from trl import is_diffusers_available
 
 from .testing_utils import require_diffusers
 
 
-if is_diffusers_available():
+if is_diffusers_available() and is_peft_available():
     from trl import DDPOConfig, DDPOTrainer, DefaultDDPOStableDiffusionPipeline
 
 
@@ -40,7 +42,7 @@ class DDPOTrainerTester(unittest.TestCase):
     """
 
     def setUp(self):
-        self.ddpo_config = DDPOConfig(
+        self.training_args = DDPOConfig(
             num_epochs=2,
             train_gradient_accumulation_steps=1,
             per_prompt_stat_tracking_buffer_size=32,
@@ -56,7 +58,7 @@ class DDPOTrainerTester(unittest.TestCase):
             pretrained_model, pretrained_model_revision=pretrained_revision, use_lora=False
         )
 
-        self.trainer = DDPOTrainer(self.ddpo_config, scorer_function, prompt_function, pipeline)
+        self.trainer = DDPOTrainer(self.training_args, scorer_function, prompt_function, pipeline)
 
         return super().setUp()
 
@@ -87,13 +89,41 @@ class DDPOTrainerTester(unittest.TestCase):
         prompt_embeds = sample["prompt_embeds"]
         advantage = torch.tensor([1.0], device=prompt_embeds.device)
 
-        self.assertEqual(latents.shape, (1, 4, 64, 64))
-        self.assertEqual(next_latents.shape, (1, 4, 64, 64))
-        self.assertEqual(log_probs.shape, (1,))
-        self.assertEqual(timesteps.shape, (1,))
-        self.assertEqual(prompt_embeds.shape, (2, 77, 32))
+        self.assertTupleEqual(latents.shape, (1, 4, 64, 64))
+        self.assertTupleEqual(next_latents.shape, (1, 4, 64, 64))
+        self.assertTupleEqual(log_probs.shape, (1,))
+        self.assertTupleEqual(timesteps.shape, (1,))
+        self.assertTupleEqual(prompt_embeds.shape, (2, 77, 32))
         loss, approx_kl, clipfrac = self.trainer.calculate_loss(
             latents, timesteps, next_latents, log_probs, advantage, prompt_embeds
         )
 
         self.assertTrue(torch.isfinite(loss.cpu()))
+
+
+@require_diffusers
+class DDPOTrainerWithLoRATester(DDPOTrainerTester):
+    """
+    Test the DDPOTrainer class.
+    """
+
+    def setUp(self):
+        self.training_args = DDPOConfig(
+            num_epochs=2,
+            train_gradient_accumulation_steps=1,
+            per_prompt_stat_tracking_buffer_size=32,
+            sample_num_batches_per_epoch=2,
+            sample_batch_size=2,
+            mixed_precision=None,
+            save_freq=1000000,
+        )
+        pretrained_model = "hf-internal-testing/tiny-stable-diffusion-torch"
+        pretrained_revision = "main"
+
+        pipeline = DefaultDDPOStableDiffusionPipeline(
+            pretrained_model, pretrained_model_revision=pretrained_revision, use_lora=True
+        )
+
+        self.trainer = DDPOTrainer(self.training_args, scorer_function, prompt_function, pipeline)
+
+        return super().setUp()

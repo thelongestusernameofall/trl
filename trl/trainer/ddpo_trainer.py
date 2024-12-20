@@ -1,4 +1,4 @@
-# Copyright 2023 DDPO-pytorch authors (Kevin Black), metric-space, The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,25 +13,32 @@
 # limitations under the License.
 
 import os
+import textwrap
 from collections import defaultdict
 from concurrent import futures
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Callable, Optional, Union
 from warnings import warn
 
 import torch
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
+from huggingface_hub import PyTorchModelHubMixin
+from transformers import is_wandb_available
 
 from ..models import DDPOStableDiffusionPipeline
-from . import BaseTrainer, DDPOConfig
-from .utils import PerPromptStatTracker
+from .ddpo_config import DDPOConfig
+from .utils import PerPromptStatTracker, generate_model_card, get_comet_experiment_url
+
+
+if is_wandb_available():
+    import wandb
 
 
 logger = get_logger(__name__)
 
 
-class DDPOTrainer(BaseTrainer):
+class DDPOTrainer(PyTorchModelHubMixin):
     """
     The DDPOTrainer uses Deep Diffusion Policy Optimization to optimise diffusion models.
     Note, this trainer is heavily inspired by the work here: https://github.com/kvablack/ddpo-pytorch
@@ -40,17 +47,19 @@ class DDPOTrainer(BaseTrainer):
     Attributes:
         **config** (`DDPOConfig`) -- Configuration object for DDPOTrainer. Check the documentation of `PPOConfig` for more
          details.
-        **reward_function** (Callable[[torch.Tensor, Tuple[str], Tuple[Any]], torch.Tensor]) -- Reward function to be used
-        **prompt_function** (Callable[[], Tuple[str, Any]]) -- Function to generate prompts to guide model
+        **reward_function** (Callable[[torch.Tensor, tuple[str], tuple[Any]], torch.Tensor]) -- Reward function to be used
+        **prompt_function** (Callable[[], tuple[str, Any]]) -- Function to generate prompts to guide model
         **sd_pipeline** (`DDPOStableDiffusionPipeline`) -- Stable Diffusion pipeline to be used for training.
         **image_samples_hook** (Optional[Callable[[Any, Any, Any], Any]]) -- Hook to be called to log images
     """
 
+    _tag_names = ["trl", "ddpo"]
+
     def __init__(
         self,
         config: DDPOConfig,
-        reward_function: Callable[[torch.Tensor, Tuple[str], Tuple[Any]], torch.Tensor],
-        prompt_function: Callable[[], Tuple[str, Any]],
+        reward_function: Callable[[torch.Tensor, tuple[str], tuple[Any]], torch.Tensor],
+        prompt_function: Callable[[], tuple[str, Any]],
         sd_pipeline: DDPOStableDiffusionPipeline,
         image_samples_hook: Optional[Callable[[Any, Any, Any], Any]] = None,
     ):
@@ -148,7 +157,9 @@ class DDPOTrainer(BaseTrainer):
         if self.config.allow_tf32:
             torch.backends.cuda.matmul.allow_tf32 = True
 
-        self.optimizer = self._setup_optimizer(trainable_layers.parameters())
+        self.optimizer = self._setup_optimizer(
+            trainable_layers.parameters() if not isinstance(trainable_layers, list) else trainable_layers
+        )
 
         self.neg_prompt_embed = self.sd_pipeline.text_encoder(
             self.sd_pipeline.tokenizer(
@@ -170,7 +181,11 @@ class DDPOTrainer(BaseTrainer):
         # more memory
         self.autocast = self.sd_pipeline.autocast or self.accelerator.autocast
 
-        self.trainable_layers, self.optimizer = self.accelerator.prepare(trainable_layers, self.optimizer)
+        if hasattr(self.sd_pipeline, "use_lora") and self.sd_pipeline.use_lora:
+            unet, self.optimizer = self.accelerator.prepare(trainable_layers, self.optimizer)
+            self.trainable_layers = list(filter(lambda p: p.requires_grad, unet.parameters()))
+        else:
+            self.trainable_layers, self.optimizer = self.accelerator.prepare(trainable_layers, self.optimizer)
 
         if self.config.async_reward_computation:
             self.executor = futures.ThreadPoolExecutor(max_workers=config.max_workers)
@@ -314,11 +329,11 @@ class DDPOTrainer(BaseTrainer):
 
         Args:
             latents (torch.Tensor):
-                The latents sampled from the diffusion model, shape: [batch_size, num_steps, ...]
+                The latents sampled from the diffusion model, shape: [batch_size, num_channels_latents, height, width]
             timesteps (torch.Tensor):
                 The timesteps sampled from the diffusion model, shape: [batch_size]
             next_latents (torch.Tensor):
-                The next latents sampled from the diffusion model, shape: [batch_size, num_steps, ...]
+                The next latents sampled from the diffusion model, shape: [batch_size, num_channels_latents, height, width]
             log_probs (torch.Tensor):
                 The log probabilities of the latents, shape: [batch_size]
             advantages (torch.Tensor):
@@ -423,7 +438,7 @@ class DDPOTrainer(BaseTrainer):
             batch_size (int): Batch size to use for sampling
 
         Returns:
-            samples (List[Dict[str, torch.Tensor]]), prompt_image_pairs (List[List[Any]])
+            samples (list[dict[str, torch.Tensor]]), prompt_image_pairs (list[list[Any]])
         """
         samples = []
         prompt_image_pairs = []
@@ -484,7 +499,7 @@ class DDPOTrainer(BaseTrainer):
             inner_epoch (int): The current inner epoch
             epoch (int): The current epoch
             global_step (int): The current global step
-            batched_samples (List[Dict[str, torch.Tensor]]): The batched samples to train on
+            batched_samples (list[dict[str, torch.Tensor]]): The batched samples to train on
 
         Side Effects:
             - Model weights are updated
@@ -494,7 +509,7 @@ class DDPOTrainer(BaseTrainer):
             global_step (int): The updated global step
         """
         info = defaultdict(list)
-        for i, sample in enumerate(batched_samples):
+        for _i, sample in enumerate(batched_samples):
             if self.config.train_cfg:
                 # concat negative prompts to sample prompts to avoid two forward passes
                 embeds = torch.cat([sample["negative_prompt_embeds"], sample["prompt_embeds"]])
@@ -518,7 +533,9 @@ class DDPOTrainer(BaseTrainer):
                     self.accelerator.backward(loss)
                     if self.accelerator.sync_gradients:
                         self.accelerator.clip_grad_norm_(
-                            self.trainable_layers.parameters(),
+                            self.trainable_layers.parameters()
+                            if not isinstance(self.trainable_layers, list)
+                            else self.trainable_layers,
                             self.config.train_max_grad_norm,
                         )
                     self.optimizer.step()
@@ -535,7 +552,7 @@ class DDPOTrainer(BaseTrainer):
                     info = defaultdict(list)
         return global_step
 
-    def _config_check(self) -> Tuple[bool, str]:
+    def _config_check(self) -> tuple[bool, str]:
         samples_per_epoch = (
             self.config.sample_batch_size * self.accelerator.num_processes * self.config.sample_num_batches_per_epoch
         )
@@ -574,3 +591,62 @@ class DDPOTrainer(BaseTrainer):
 
     def _save_pretrained(self, save_directory):
         self.sd_pipeline.save_pretrained(save_directory)
+        self.create_model_card()
+
+    def create_model_card(
+        self,
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, list[str], None] = None,
+    ):
+        """
+        Creates a draft of a model card using the information available to the `Trainer`.
+
+        Args:
+            model_name (`str`, *optional*, defaults to `None`):
+                The name of the model.
+            dataset_name (`str`, *optional*, defaults to `None`):
+                The name of the dataset used for training.
+            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
+                Tags to be associated with the model card.
+        """
+        if not self.is_world_process_zero():
+            return
+
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+            base_model = self.model.config._name_or_path
+        else:
+            base_model = None
+
+        tags = tags or []
+        if isinstance(tags, str):
+            tags = [tags]
+
+        if hasattr(self.model.config, "unsloth_version"):
+            tags.append("unsloth")
+
+        citation = textwrap.dedent("""\
+        @inproceedings{black2024training,
+            title        = {{Training Diffusion Models with Reinforcement Learning}},
+            author       = {Kevin Black and Michael Janner and Yilun Du and Ilya Kostrikov and Sergey Levine},
+            year         = 2024,
+            booktitle    = {The Twelfth International Conference on Learning Representations, {ICLR} 2024, Vienna, Austria, May 7-11, 2024},
+            publisher    = {OpenReview.net},
+            url          = {https://openreview.net/forum?id=YCWjhGrJFD},
+        }""")
+
+        model_card = generate_model_card(
+            base_model=base_model,
+            model_name=model_name,
+            hub_model_id=self.hub_model_id,
+            dataset_name=dataset_name,
+            tags=tags,
+            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
+            trainer_name="DDPO",
+            trainer_citation=citation,
+            paper_title="Training Diffusion Models with Reinforcement Learning",
+            paper_id="2305.13301",
+        )
+
+        model_card.save(os.path.join(self.args.output_dir, "README.md"))

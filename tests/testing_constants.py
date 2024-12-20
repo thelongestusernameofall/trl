@@ -1,4 +1,4 @@
-# Copyright 2022 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,6 +14,5 @@
 
 CI_HUB_USER = "__DUMMY_TRANSFORMERS_USER__"
 CI_HUB_USER_FULL_NAME = "Dummy User"
-CI_HUB_USER_TOKEN = "hf_94wBhPGp6KrrTH3KDchhKpRxZwd6dmHWLL"
 
 CI_HUB_ENDPOINT = "https://hub-ci.huggingface.co"

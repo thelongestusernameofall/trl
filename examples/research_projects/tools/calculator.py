@@ -1,5 +1,4 @@
-# coding=utf-8
-# Copyright 2023 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -59,7 +58,7 @@ def exact_match_reward(responses, answers=None):
 # set up models
 model_id = "gpt2"
 model = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
-model_ref = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
+ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 tokenizer.pad_token = tokenizer.eos_token
 
@@ -94,7 +93,7 @@ ppo_config = PPOConfig(
     mini_batch_size=64,
     log_with="wandb",
 )
-ppo_trainer = PPOTrainer(ppo_config, model, model_ref, tokenizer)
+ppo_trainer = PPOTrainer(ppo_config, model, ref_model, tokenizer)
 
 # text env
 text_env = TextEnvironment(
@@ -107,7 +106,7 @@ text_env = TextEnvironment(
 )
 
 # main training loop
-for step in range(100):
+for _step in range(100):
     tasks, answers = generate_data(ppo_config.batch_size)
     queries, responses, masks, rewards, histories = text_env.run(tasks, answers=answers)
     train_stats = ppo_trainer.step(queries, responses, rewards, masks)

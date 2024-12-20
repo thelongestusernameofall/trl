@@ -1,5 +1,4 @@
-# coding=utf-8
-# Copyright 2023 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -46,7 +45,7 @@ class ScriptArguments:
 
 
 parser = HfArgumentParser(ScriptArguments)
-args = parser.parse_args_into_dataclasses()[0]
+script_args = parser.parse_args_into_dataclasses()[0]
 
 lora_config = LoraConfig(
     r=16,
@@ -59,13 +58,13 @@ lora_config = LoraConfig(
 
 # set up models
 model = AutoModelForCausalLMWithValueHead.from_pretrained(
-    args.model_name,
+    script_args.model_name,
     use_auth_token=True,
     trust_remote_code=True,
     load_in_4bit=True,
     peft_config=lora_config,
 )
-tokenizer = AutoTokenizer.from_pretrained(args.model_name, use_auth_token=True)
+tokenizer = AutoTokenizer.from_pretrained(script_args.model_name, use_auth_token=True)
 tokenizer.pad_token = tokenizer.eos_token
 
 # system prompt
@@ -91,30 +90,30 @@ generation_kwargs = {
     "do_sample": True,
     "pad_token_id": tokenizer.eos_token_id,
     "eos_token_id": -1,
-    "max_new_tokens": args.max_new_tokens,
+    "max_new_tokens": script_args.max_new_tokens,
 }
 
 # trainer
 config = PPOConfig(
-    batch_size=args.batch_size,
-    model_name=args.model_name,
-    learning_rate=args.learning_rate,
-    log_with=args.log_with,
-    mini_batch_size=args.mini_batch_size,
-    ppo_epochs=args.ppo_epochs,
-    gradient_accumulation_steps=args.gradient_accumulation_steps,
-    seed=args.seed,
+    batch_size=script_args.batch_size,
+    model_name=script_args.model_name,
+    learning_rate=script_args.learning_rate,
+    log_with=script_args.log_with,
+    mini_batch_size=script_args.mini_batch_size,
+    ppo_epochs=script_args.ppo_epochs,
+    gradient_accumulation_steps=script_args.gradient_accumulation_steps,
+    seed=script_args.seed,
     optimize_cuda_cache=True,
 )
-ppo_trainer = PPOTrainer(config=config, model=model, tokenizer=tokenizer)
-dataset = load_dataset("trivia_qa", "rc", split="train")
-local_seed = args.seed + ppo_trainer.accelerator.process_index * 100003  # Prime
+ppo_trainer = PPOTrainer(args=config, model=model, tokenizer=tokenizer)
+dataset = load_dataset("mandarjoshi/trivia_qa", "rc", split="train")
+local_seed = script_args.seed + ppo_trainer.accelerator.process_index * 100003  # Prime
 dataset = dataset.shuffle(local_seed)
 
 
 def data_generator():
     for i in range(len(dataset)):
-        yield dataset[i]["question"], [item for item in dataset[i]["answer"]["normalized_aliases"]]
+        yield dataset[i]["question"], list(dataset[i]["answer"]["normalized_aliases"])
 
 
 gen = data_generator()
@@ -123,7 +122,7 @@ gen = iter(gen)
 
 def generate_data(n):
     tasks, answers = [], []
-    for i in range(n):
+    for _i in range(n):
         q, a = next(gen)
         tasks.append(q)
         answers.append(a)
@@ -143,10 +142,14 @@ def exact_match_reward(responses, answers=None):
     return rewards
 
 
+def tool_fn(x):
+    # limit the amount of tokens
+    return tool(x).split("\n")[1][:600]
+
+
 # text env
 tool = load_tool("vwxyzjn/pyserini-wikipedia-kilt-doc")
-# limit the amount if tokens
-tool_fn = lambda x: tool(x).split("\n")[1][:600]  # noqa
+
 text_env = TextEnvironment(
     model,
     tokenizer,
@@ -172,7 +175,7 @@ def print_trainable_parameters(model):
 
 print_trainable_parameters(model)
 # main training loop
-for i in range(args.iterations):
+for i in range(script_args.iterations):
     tasks, answers = generate_data(config.batch_size)
     queries, responses, masks, rewards, histories = text_env.run(tasks, answers=answers)
     train_stats = ppo_trainer.step(queries, responses, rewards, masks)
@@ -184,8 +187,6 @@ for i in range(args.iterations):
         "answer": [", ".join(item) for item in answers],
     }
     all_rewards = ppo_trainer.accelerator.gather(torch.tensor(rewards, device=ppo_trainer.accelerator.device))
-    ppo_trainer.log_stats(
-        train_stats, texts, [item for item in all_rewards], columns_to_log=["query", "response", "answer"]
-    )
+    ppo_trainer.log_stats(train_stats, texts, list(all_rewards), columns_to_log=["query", "response", "answer"])
     if i % 100 == 0:
-        ppo_trainer.save_pretrained(f"models/{args.model_name}_{args.seed}_{i}_triviaqa")
+        ppo_trainer.save_pretrained(f"models/{script_args.model_name}_{script_args.seed}_{i}_triviaqa")

@@ -1,3 +1,17 @@
+# Copyright 2024 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # Fine-Tune Llama2-7b on SE paired dataset
 import os
 from dataclasses import dataclass, field
@@ -8,10 +22,17 @@ from accelerate import Accelerator
 from datasets import load_dataset
 from peft import AutoPeftModelForCausalLM, LoraConfig
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, HfArgumentParser, TrainingArguments
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    BitsAndBytesConfig,
+    HfArgumentParser,
+    is_torch_npu_available,
+    is_torch_xpu_available,
+    set_seed,
+)
 
-from trl import SFTTrainer
-from trl.import_utils import is_xpu_available
+from trl import SFTConfig, SFTTrainer
 from trl.trainer import ConstantLengthDataset
 
 
@@ -26,7 +47,7 @@ class ScriptArguments:
     shuffle_buffer: Optional[int] = field(default=5000, metadata={"help": "the shuffle buffer size"})
     seq_length: Optional[int] = field(default=1024, metadata={"help": "the sequence length"})
     num_workers: Optional[int] = field(default=4, metadata={"help": "the number of workers"})
-    packing: Optional[bool] = field(default=True, metadata={"help": "whether to use packing for SFTTrainer"})
+    use_bnb: Optional[bool] = field(default=True, metadata={"help": "whether to use BitsAndBytes"})
 
     # LoraConfig
     lora_alpha: Optional[float] = field(default=16, metadata={"help": "the lora alpha parameter"})
@@ -34,7 +55,7 @@ class ScriptArguments:
     lora_r: Optional[int] = field(default=8, metadata={"help": "the lora r parameter"})
 
 
-parser = HfArgumentParser((ScriptArguments, TrainingArguments))
+parser = HfArgumentParser((ScriptArguments, SFTConfig))
 script_args, training_args = parser.parse_args_into_dataclasses()
 peft_config = LoraConfig(
     r=script_args.lora_r,
@@ -45,13 +66,15 @@ peft_config = LoraConfig(
     task_type="CAUSAL_LM",
 )
 
-if training_args.group_by_length and script_args.packing:
+if training_args.group_by_length and training_args.packing:
     raise ValueError("Cannot use both packing and group by length")
 
 # `gradient_checkpointing` was True by default until `1f3314`, but it's actually not used.
 # `gradient_checkpointing=True` will cause `Variable._execution_engine.run_backward`.
 if training_args.gradient_checkpointing:
     raise ValueError("gradient_checkpointing not supported")
+
+set_seed(training_args.seed)
 
 
 def chars_token_ratio(dataset, tokenizer, nb_examples=400):
@@ -91,7 +114,7 @@ def prepare_sample_text(example):
     return text
 
 
-def create_datasets(tokenizer, args):
+def create_datasets(tokenizer, args, seed=None):
     dataset = load_dataset(
         args.dataset_name,
         data_dir=args.subset,
@@ -104,9 +127,9 @@ def create_datasets(tokenizer, args):
         print("Loading the dataset in streaming mode")
         valid_data = dataset.take(args.size_valid_set)
         train_data = dataset.skip(args.size_valid_set)
-        train_data = train_data.shuffle(buffer_size=args.shuffle_buffer, seed=None)
+        train_data = train_data.shuffle(buffer_size=args.shuffle_buffer, seed=seed)
     else:
-        dataset = dataset.train_test_split(test_size=0.005, seed=None)
+        dataset = dataset.train_test_split(test_size=0.005, seed=seed)
         train_data = dataset["train"]
         valid_data = dataset["test"]
         print(f"Size of the train set: {len(train_data)}. Size of the validation set: {len(valid_data)}")
@@ -133,11 +156,13 @@ def create_datasets(tokenizer, args):
     return train_dataset, valid_dataset
 
 
-bnb_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=torch.bfloat16,
-)
+bnb_config = None
+if script_args.use_bnb:
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16,
+    )
 
 base_model = AutoModelForCausalLM.from_pretrained(
     script_args.model_name,
@@ -153,16 +178,16 @@ tokenizer = AutoTokenizer.from_pretrained(script_args.model_name, trust_remote_c
 tokenizer.pad_token = tokenizer.eos_token
 tokenizer.padding_side = "right"  # Fix weird overflow issue with fp16 training
 
-train_dataset, eval_dataset = create_datasets(tokenizer, script_args)
+train_dataset, eval_dataset = create_datasets(tokenizer, script_args, seed=training_args.seed)
 
 trainer = SFTTrainer(
     model=base_model,
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
     peft_config=peft_config,
-    packing=script_args.packing,
     max_seq_length=None,
-    tokenizer=tokenizer,
+    formatting_func=prepare_sample_text,
+    processing_class=tokenizer,
     args=training_args,
 )
 trainer.train()
@@ -173,8 +198,10 @@ trainer.model.save_pretrained(output_dir)
 
 # Free memory for merging weights
 del base_model
-if is_xpu_available():
+if is_torch_xpu_available():
     torch.xpu.empty_cache()
+elif is_torch_npu_available():
+    torch.npu.empty_cache()
 else:
     torch.cuda.empty_cache()
 

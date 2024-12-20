@@ -1,4 +1,18 @@
-""" trl is an open library for RL with transformer models.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""trl is an open library for RL with transformer models.
 
 Note:
 
@@ -57,27 +71,32 @@ To create the package for pypi.
 from setuptools import find_packages, setup
 
 
-__version__ = "0.7.5.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
+__version__ = "0.14.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
 
 REQUIRED_PKGS = [
-    "torch>=1.4.0",
-    "transformers>=4.18.0",
-    "numpy>=1.18.2",
-    "accelerate",
-    "datasets",
-    "tyro>=0.5.11",
+    "accelerate>=0.34.0",
+    "datasets>=2.21.0",
+    "rich",  # rich shouldn't be a required package for trl, we should remove it from here
+    "transformers>=4.46.0",
 ]
 EXTRAS = {
-    "test": ["parameterized", "pytest", "pytest-xdist", "accelerate"],
-    "peft": ["peft>=0.4.0"],
+    # Windows support is partially supported with DeepSpeed https://github.com/microsoft/DeepSpeed/tree/master#windows
+    "deepspeed": ["deepspeed>=0.14.4; sys_platform != 'win32'"],
     "diffusers": ["diffusers>=0.18.0"],
-    "deepspeed": ["deepspeed>=0.9.5"],
-    "benchmark": ["wandb", "ghapi", "openrlbenchmark==0.2.1a5", "requests", "deepspeed"],
-    "quantization": ["bitsandbytes<=0.41.1"],
+    "judges": ["openai>=1.23.2", "llm-blender>=0.0.2"],
+    # liger-kernel depends on triton, which is only available on Linux https://github.com/triton-lang/triton#compatibility
+    "liger": ["liger-kernel>=0.4.0; sys_platform != 'win32'"],
+    "mergekit": ["mergekit>=0.0.5.1"],
+    "peft": ["peft>=0.8.0"],
+    "quantization": ["bitsandbytes"],
+    "scikit": ["scikit-learn"],
+    "test": ["parameterized", "pytest-cov", "pytest-rerunfailures", "pytest-xdist", "pytest"],
+    "vlm": ["Pillow"],
 }
 EXTRAS["dev"] = []
 for reqs in EXTRAS.values():
     EXTRAS["dev"].extend(reqs)
+
 
 setup(
     name="trl",
@@ -90,22 +109,28 @@ setup(
         "Natural Language :: English",
         "Operating System :: OS Independent",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.7",
-        "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
     ],
     url="https://github.com/huggingface/trl",
-    packages=find_packages(),
+    entry_points={
+        "console_scripts": ["trl=trl.cli:main"],
+    },
     include_package_data=True,
+    package_data={
+        "trl": ["templates/*.md"],
+    },
+    packages=find_packages(exclude={"tests", "tests.slow"}),
     install_requires=REQUIRED_PKGS,
     extras_require=EXTRAS,
-    python_requires=">=3.7",
+    python_requires=">=3.9",
     long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
     zip_safe=False,
     version=__version__,
-    description="A Pytorch implementation of Proximal Policy Optimization for transfomer language models.",
+    description="Train transformer language models with reinforcement learning.",
     keywords="ppo, transformers, huggingface, gpt2, language modeling, rlhf",
     author="Leandro von Werra",
     author_email="leandro.vonwerra@gmail.com",

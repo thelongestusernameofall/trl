@@ -1,4 +1,4 @@
-# Copyright 2023 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,8 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import tempfile
 import unittest
+from functools import partial
 
 import torch
 from datasets import Dataset
@@ -23,23 +25,34 @@ from trl import IterativeSFTTrainer
 
 
 class IterativeTrainerTester(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
-        cls.model = AutoModelForCausalLM.from_pretrained(cls.model_id)
-        cls.tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
-        cls.tokenizer.pad_token = cls.tokenizer.eos_token
+    def setUp(self):
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
 
         # get t5 as seq2seq example:
-        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration-correct-vocab"
-        cls.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
+        self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
     def _init_tensor_dummy_dataset(self):
         dummy_dataset_dict = {
-            "input_ids": [torch.tensor([5303, 3621]), torch.tensor([3666, 1438, 318]), torch.tensor([5303, 3621])],
-            "attention_mask": [torch.tensor([1, 1]), torch.tensor([1, 1, 1]), torch.tensor([1, 1])],
-            "labels": [torch.tensor([5303, 3621]), torch.tensor([3666, 1438, 318]), torch.tensor([5303, 3621])],
+            "input_ids": [
+                torch.tensor([5303, 3621, 3666, 1438, 318]),
+                torch.tensor([3666, 1438, 318, 3666, 1438, 318]),
+                torch.tensor([5303, 3621, 3666, 1438, 318]),
+            ],
+            "attention_mask": [
+                torch.tensor([1, 1, 1, 1, 1]),
+                torch.tensor([1, 1, 1, 1, 1, 1]),
+                torch.tensor([1, 1, 1, 1, 1]),
+            ],
+            "labels": [
+                torch.tensor([5303, 3621, 3666, 1438, 318]),
+                torch.tensor([3666, 1438, 318, 3666, 1438, 318]),
+                torch.tensor([5303, 3621, 3666, 1438, 318]),
+            ],
         }
 
         dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
@@ -56,15 +69,10 @@ class IterativeTrainerTester(unittest.TestCase):
         dummy_dataset.set_format("torch")
         return dummy_dataset
 
-    def setUp(self):
-        # initialize trainer
-        self.model.train()
-        return super().setUp()
-
     @parameterized.expand(
         [
-            ["gpt2", "tensor"],
-            ["gpt2", "text"],
+            ["qwen", "tensor"],
+            ["qwen", "text"],
             ["t5", "tensor"],
             ["t5", "text"],
         ]
@@ -86,21 +94,24 @@ class IterativeTrainerTester(unittest.TestCase):
                     "texts_labels": dummy_dataset["texts_labels"],
                 }
 
-            if model_name == "gpt2":
+            if model_name == "qwen":
                 model = self.model
                 tokenizer = self.tokenizer
             else:
                 model = self.t5_model
                 tokenizer = self.t5_tokenizer
 
-            args = TrainingArguments(
+            training_args = TrainingArguments(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=2,
+                learning_rate=1e-3,
+                report_to="none",
             )
-            iterative_trainer = IterativeSFTTrainer(model=model, args=args, tokenizer=tokenizer)
+            iterative_trainer = IterativeSFTTrainer(model=model, args=training_args, processing_class=tokenizer)
+            iterative_trainer.optimizer.zero_grad = partial(iterative_trainer.optimizer.zero_grad, set_to_none=False)
 
             iterative_trainer.step(**inputs)
 
             for param in iterative_trainer.model.parameters():
-                assert param.grad is not None
+                self.assertIsNotNone(param.grad)

@@ -1,3 +1,17 @@
+# Copyright 2024 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import argparse
 import os
 
@@ -38,9 +52,9 @@ def get_args():
     parser.add_argument("--weight_decay", type=float, default=0.05)
 
     parser.add_argument("--local_rank", type=int, default=0)
-    parser.add_argument("--no_fp16", action="store_false")
+    parser.add_argument("--fp16", action="store_true", default=False)
     parser.add_argument("--bf16", action="store_true", default=False)
-    parser.add_argument("--no_gradient_checkpointing", action="store_false", default=False)
+    parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--num_workers", type=int, default=None)
     parser.add_argument("--output_dir", type=str, default="./checkpoints")
@@ -148,7 +162,7 @@ def run_training(args, train_data, val_data):
     training_args = TrainingArguments(
         output_dir=args.output_dir,
         dataloader_drop_last=True,
-        evaluation_strategy="steps",
+        eval_strategy="steps",
         max_steps=args.max_steps,
         eval_steps=args.eval_freq,
         save_steps=args.save_freq,
@@ -159,8 +173,8 @@ def run_training(args, train_data, val_data):
         lr_scheduler_type=args.lr_scheduler_type,
         warmup_steps=args.num_warmup_steps,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
-        gradient_checkpointing=not args.no_gradient_checkpointing,
-        fp16=not args.no_fp16,
+        gradient_checkpointing=args.gradient_checkpointing,
+        fp16=args.fp16,
         bf16=args.bf16,
         weight_decay=args.weight_decay,
         run_name="llama-7b-finetuned",

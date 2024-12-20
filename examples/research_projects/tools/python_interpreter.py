@@ -1,5 +1,4 @@
-# coding=utf-8
-# Copyright 2023 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -46,7 +45,7 @@ class ScriptArguments:
 
 
 parser = HfArgumentParser(ScriptArguments)
-args = parser.parse_args_into_dataclasses()[0]
+script_args = parser.parse_args_into_dataclasses()[0]
 
 
 def exact_match_reward(responses, answers=None):
@@ -61,9 +60,9 @@ def exact_match_reward(responses, answers=None):
             if match_pattern:
                 predicted_number = float(match_pattern[0])
             if predicted_number is not None:
-                if np.abs((predicted_number - float(answer))) < 0.1:
+                if np.abs(predicted_number - float(answer)) < 0.1:
                     reward += 1.0
-        except:  # noqa
+        except Exception:
             pass
         rewards.append(torch.tensor(reward))
     return rewards
@@ -91,24 +90,24 @@ lora_config = LoraConfig(
 
 # set up models
 model = AutoModelForCausalLMWithValueHead.from_pretrained(
-    args.model_name,
+    script_args.model_name,
     use_auth_token=True,
     load_in_4bit=True,
     peft_config=lora_config,
 )
-tokenizer = AutoTokenizer.from_pretrained(args.model_name, use_auth_token=True)
+tokenizer = AutoTokenizer.from_pretrained(script_args.model_name, use_auth_token=True)
 tokenizer.pad_token = tokenizer.eos_token
 
-ds = load_dataset("gsm8k", "main", split="train")
+ds = load_dataset("openai/gsm8k", "main", split="train")
 ds = ds.rename_columns({"question": "query"})
 ds = ds.map(lambda x: {"answer": x["answer"].split("#### ")[1]})
 ds = ds.select(range(1, len(ds)))  # skip the first sample which is used in prompt
 
-ds_test = load_dataset("gsm8k", "main", split="test")
+ds_test = load_dataset("openai/gsm8k", "main", split="test")
 ds_test = ds_test.rename_columns({"question": "query"})
 ds_test = ds_test.map(lambda x: {"answer": x["answer"].split("#### ")[1]})
 
-test_dataloader = torch.utils.data.DataLoader(ds_test, batch_size=args.batch_size)
+test_dataloader = torch.utils.data.DataLoader(ds_test, batch_size=script_args.batch_size)
 
 # prompt
 prompt = """\
@@ -139,23 +138,23 @@ generation_kwargs = {
     "do_sample": True,
     "pad_token_id": tokenizer.eos_token_id,
     "eos_token_id": -1,
-    "max_new_tokens": args.max_new_tokens,
+    "max_new_tokens": script_args.max_new_tokens,
 }
 
 # trainer
 ppo_config = PPOConfig(
-    batch_size=args.batch_size,
-    learning_rate=args.learning_rate,
-    mini_batch_size=args.mini_batch_size,
-    ppo_epochs=args.ppo_epochs,
-    gradient_accumulation_steps=args.gradient_accumulation_steps,
+    batch_size=script_args.batch_size,
+    learning_rate=script_args.learning_rate,
+    mini_batch_size=script_args.mini_batch_size,
+    ppo_epochs=script_args.ppo_epochs,
+    gradient_accumulation_steps=script_args.gradient_accumulation_steps,
     log_with="wandb",
     tracker_project_name="trl-gsm8k",
     remove_unused_columns=False,
     optimize_cuda_cache=True,
 )
 
-ppo_trainer = PPOTrainer(config=ppo_config, model=model, tokenizer=tokenizer, dataset=ds)
+ppo_trainer = PPOTrainer(args=ppo_config, model=model, tokenizer=tokenizer, dataset=ds)
 test_dataloader = ppo_trainer.accelerator.prepare(test_dataloader)
 
 # text env
@@ -170,7 +169,7 @@ text_env = TextEnvironment(
 )
 
 # main training loop
-for epoch in range(args.n_epochs):
+for epoch in range(script_args.n_epochs):
     for step, batch in enumerate(ppo_trainer.dataloader):
         if (step == 0) and (epoch % 4 == 0):  # evaluate every 4 epochs
             reward_mean_test = evaluate(test_dataloader, text_env, ppo_trainer)
@@ -191,4 +190,4 @@ for epoch in range(args.n_epochs):
         ppo_trainer.log_stats(train_stats, texts, rewards, columns_to_log=["query", "response", "answer"])
 
 reward_mean_test = evaluate(test_dataloader, text_env, ppo_trainer)
-ppo_trainer.save_pretrained(f"model/{args.model_name}-gsm8k")
+ppo_trainer.save_pretrained(f"model/{script_args.model_name}-gsm8k")

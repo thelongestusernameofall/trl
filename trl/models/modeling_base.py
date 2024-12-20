@@ -1,4 +1,4 @@
-# Copyright 2022 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,10 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import json
 import logging
 import os
 from copy import deepcopy
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -27,9 +29,8 @@ from huggingface_hub.utils import (
     RepositoryNotFoundError,
 )
 from safetensors.torch import load_file as safe_load_file
-from transformers import PreTrainedModel
-
-from ..import_utils import is_peft_available, is_transformers_greater_than, is_xpu_available
+from transformers import GenerationMixin, PreTrainedModel, is_torch_npu_available, is_torch_xpu_available
+from transformers.utils import is_peft_available
 
 
 if is_peft_available():
@@ -43,10 +44,9 @@ if is_peft_available():
         prepare_model_for_kbit_training,
     )
 
-if is_transformers_greater_than("4.33.0"):
-    from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
-else:
-    from transformers.deepspeed import is_deepspeed_zero3_enabled
+
+from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+
 
 LAYER_PATTERNS = [
     "transformer.h.{layer}",
@@ -63,13 +63,14 @@ class PreTrainedModelWrapper(nn.Module):
     (`~transformers.PreTrainedModel`) class.
 
     Attributes:
-        pretrained_model: (`transformers.PreTrainedModel`)
+        pretrained_model (`transformers.PreTrainedModel`):
             The model to be wrapped.
-        parent_class: (`transformers.PreTrainedModel`)
+        parent_class (`transformers.PreTrainedModel`):
             The parent class of the model to be wrapped.
-        supported_args: (`list`)
+        supported_args (`list`):
             The list of arguments that are supported by the wrapper class.
     """
+
     transformers_parent_class = None
     supported_args = None
     supported_modules = ("v_head",)
@@ -98,6 +99,9 @@ class PreTrainedModelWrapper(nn.Module):
         if hasattr(pretrained_model, "gradient_checkpointing_enable"):
             self.gradient_checkpointing_enable = pretrained_model.gradient_checkpointing_enable
 
+        if hasattr(pretrained_model, "enable_input_require_grads"):
+            self.enable_input_require_grads = pretrained_model.enable_input_require_grads
+
         self.supports_rm_adapter = supports_rm_adapter
         self.rm_adapter_name = rm_adapter_name
         self.policy_adapter_name = "default"
@@ -112,7 +116,6 @@ class PreTrainedModelWrapper(nn.Module):
         `transformers.PreTrainedModel` class. The arguments that are specific to the
         `transformers.PreTrainedModel` class are passed along this method and filtered
         out from the `kwargs` argument.
-
 
         Args:
             pretrained_model_name_or_path (`str` or `transformers.PreTrainedModel`):
@@ -210,7 +213,7 @@ class PreTrainedModelWrapper(nn.Module):
 
                 # Wrap the pretrained model with the trained peft adapter
                 pretrained_model = PeftModel.from_pretrained(
-                    pretrained_model, pretrained_model_name_or_path, is_trainable=is_trainable
+                    pretrained_model, pretrained_model_name_or_path, is_trainable=is_trainable, token=token
                 )
                 logging.info("Trained peft adapter loaded")
             else:
@@ -308,7 +311,7 @@ class PreTrainedModelWrapper(nn.Module):
                     use_safe = False
 
             loading_func = safe_load_file if use_safe else torch.load
-            load_kwargs = {} if use_safe else {"map_location": "cpu"}
+            load_kwargs = {} if use_safe else {"map_location": "cpu", "weights_only": True}
 
             if is_resuming_training:
                 if is_sharded:
@@ -377,12 +380,12 @@ class PreTrainedModelWrapper(nn.Module):
                     )
             # load json
             if is_resuming_training:
-                with open(index_file_name, "r") as f:
+                with open(index_file_name) as f:
                     index = json.load(f)
                 # check filename with `v_head` or any known extra module:
                 files_to_download = set()
                 for k, v in index["weight_map"].items():
-                    if any([module in k for module in cls.supported_modules]):
+                    if any(module in k for module in cls.supported_modules):
                         files_to_download.add(v)
                 is_sharded = True
 
@@ -399,8 +402,10 @@ class PreTrainedModelWrapper(nn.Module):
                 The current device.
         """
         state = PartialState()
-        if is_xpu_available():
+        if is_torch_xpu_available():
             return f"xpu:{state.local_process_index}"
+        elif is_torch_npu_available():
+            return f"npu:{state.local_process_index}"
         else:
             return state.local_process_index if torch.cuda.is_available() else "cpu"
 
@@ -457,7 +462,7 @@ class PreTrainedModelWrapper(nn.Module):
                     "adapter_model.bin",
                     token=token,
                 )
-            except:  # noqa
+            except Exception:
                 filename = os.path.join(adapter_model_id, "adapter_model.safetensors")
                 safe_loading = True
                 if not os.path.exists(filename):
@@ -467,22 +472,23 @@ class PreTrainedModelWrapper(nn.Module):
                             "adapter_model.safetensors",
                             token=token,
                         )
-                    except:  # noqa
+                    except Exception as exc:
                         raise ValueError(
-                            "Could not find adapter model in the Hub, make sure you have the correct adapter model id."
-                        )
+                            "Could not find adapter model in the Hub, "
+                            "make sure you have the correct adapter model id."
+                        ) from exc
                 else:
                     local_filename = filename
         else:
             local_filename = filename
 
         loading_func = safe_load_file if safe_loading else torch.load
-        load_kwargs = {} if safe_loading else {"map_location": "cpu"}
+        load_kwargs = {} if safe_loading else {"map_location": "cpu", "weights_only": True}
 
         adapter_state_dict = loading_func(local_filename, **load_kwargs)
 
         for score_name_candidate in cls.supported_rm_modules:
-            if any([score_name_candidate in name for name in adapter_state_dict.keys()]):
+            if any(score_name_candidate in name for name in adapter_state_dict.keys()):
                 score_name = score_name_candidate
                 # we have found the correct head name and can break
                 break
@@ -495,7 +501,7 @@ class PreTrainedModelWrapper(nn.Module):
                 score_dict[key_name] = param.to(cls._get_current_device())
 
         num_labels, hidden_dim = score_dict["weight"].shape
-        has_bias = any(["bias" in name for name in adapter_state_dict.keys()])
+        has_bias = any("bias" in name for name in adapter_state_dict.keys())
 
         score = nn.Linear(hidden_dim, num_labels, bias=has_bias).to(
             device=cls._get_current_device(),
@@ -598,7 +604,7 @@ class PreTrainedModelWrapper(nn.Module):
 
 
 def create_reference_model(
-    model: PreTrainedModelWrapper, num_shared_layers: int = None, pattern: str = None
+    model: PreTrainedModelWrapper, num_shared_layers: Optional[int] = None, pattern: Optional[str] = None
 ) -> PreTrainedModelWrapper:
     """
     Creates a static reference copy of a model. Note that model will be in `.eval()` mode.
@@ -609,12 +615,12 @@ def create_reference_model(
         pattern (`str`, *optional*): The shared layers are selected with a string pattern
             (e.g. "transformer.h.{layer}" for GPT2) and if a custom pattern is necessary it can be passed here.
 
-    Returns
+    Returns:
         `PreTrainedModelWrapper`
     """
     if is_deepspeed_zero3_enabled():
         raise ValueError(
-            "DeepSpeed ZeRO-3 is enabled and is not compatible with `create_reference_model()`. Please instantiate your reference model directly with `AutoCausalLM.from_pretrained()`."
+            "DeepSpeed ZeRO-3 is enabled and is not compatible with `create_reference_model()`. Please instantiate your reference model directly with `AutoModelForCausalLM.from_pretrained()`."
         )
 
     parameter_names = [n for n, _ in model.named_parameters()]
@@ -633,7 +639,7 @@ def create_reference_model(
     else:
         for pattern_candidate in LAYER_PATTERNS:
             pattern_candidate = pattern_candidate.format(layer=num_shared_layers)
-            if any([pattern_candidate in name for name in parameter_names]):
+            if any(pattern_candidate in name for name in parameter_names):
                 pattern = pattern_candidate
                 break
 
@@ -645,7 +651,7 @@ def create_reference_model(
     unshared_param_list = []
 
     shared_parameter = True
-    for name, param in model.named_parameters():
+    for name, _param in model.named_parameters():
         if pattern in name:
             shared_parameter = False
         if shared_parameter:
@@ -658,8 +664,7 @@ def create_reference_model(
         param = model.get_parameter(param_name)
         param.requires_grad = False
 
-        ref_param = ref_model.get_parameter(param_name)  # noqa
-        ref_param = param  # noqa
+        _ref_param = ref_model.get_parameter(param_name)
 
     # for all other parameters just make sure they don't use gradients
     for param_name in unshared_param_list:
@@ -670,3 +675,58 @@ def create_reference_model(
         logging.warning("Pattern passed or found, but no layers matched in the model. Check for a typo.")
 
     return ref_model.eval()
+
+
+class GeometricMixtureWrapper(GenerationMixin):
+    r"""
+    Geometric Mixture generation wrapper that samples from the logits of two model's geometric mixture.
+
+    Args:
+        model (`PreTrainedModel`): The model to be wrapped.
+        ref_model (`PreTrainedModel`): The reference model.
+        generation_config (`GenerationConfig`): The generation config.
+        mixture_coef (`float`, *optional* - default: 0.5): The mixture coefficient.
+    """
+
+    main_input_name = "input_ids"
+    _supports_cache_class = False
+    _supports_static_cache = False
+
+    def __init__(self, model, ref_model, generation_config, mixture_coef=0.5, device=None):
+        super().__init__()
+
+        self.model = model
+        self.config = model.config
+        self.ref_model = ref_model
+        self.generation_config = generation_config
+        self.mixture_coef = mixture_coef
+        self.device = device
+
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
+
+    @torch.inference_mode()
+    def forward(self, *args, **kwargs):
+        model_outputs = self.model(*args, **kwargs)
+        model_logits = model_outputs.logits
+        ref_model_logits = self.ref_model(*args, **kwargs).logits
+
+        model_outputs.logits = torch.nn.functional.log_softmax(
+            self.mixture_coef * ref_model_logits + (1 - self.mixture_coef) * model_logits, dim=-1
+        )
+
+        return model_outputs
+
+    def prepare_inputs_for_generation(self, *args, **kwargs):
+        # turn off cache in the generation config
+        kwargs["use_cache"] = False
+        model_inputs = self.model.prepare_inputs_for_generation(*args, **kwargs)
+        _ = self.ref_model.prepare_inputs_for_generation(*args, **kwargs)
+
+        return model_inputs
+
+    def _validate_model_class(self):
+        self.model._validate_model_class()
+
+    def _validate_model_kwargs(self, model_kwargs):
+        return self.model._validate_model_kwargs(model_kwargs)
