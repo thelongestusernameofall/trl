@@ -11,13 +11,15 @@ data_path=/data0/research/AI/GPT/RLHF/trl/data/using
 #target_modules="q_proj,v_proj,k_proj,out_proj,fc_in,fc_out,wte"
 target_modules="q_proj,v_proj,k_proj"
 
-load_in_4bit=false # true
+load_in_4bit=true # true
 deepspeed=ds_zero2_gpu.json
 report_to=none
 
+#    --deepspeed ${deepspeed} \
 #torchrun --nnodes 1 --nproc_per_node 8 dpo_llama2_simon.py \
-deepspeed dpo_llama2_simon.py \
-    --deepspeed ${deepspeed} \
+#deepspeed dpo_llama2_simon.py \
+
+accelerate launch --multi_gpu --num_machines 1  --num_processes 8 dpo_llama2_simon.py\
     --model_name_or_path ${model_name} \
     --output_dir ${output_dir} \
     --load_in_4bit ${load_in_4bit} \

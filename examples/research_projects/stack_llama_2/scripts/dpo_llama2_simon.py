@@ -11,6 +11,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, 
 from trl import DPOTrainer
 from accelerate import Accelerator
 
+
 # Define and parse arguments.
 @dataclass
 class ScriptArguments:
@@ -182,16 +183,21 @@ if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     script_args = parser.parse_args_into_dataclasses()[0]
 
+    device_map = None
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    ddp = world_size != 1
+
     # 1. load a pretrained model
     model = AutoModelForCausalLM.from_pretrained(
         script_args.model_name_or_path,
         low_cpu_mem_usage=True,
         torch_dtype=torch.float16,
         load_in_4bit=script_args.load_in_4bit,
+        device_map=device_map,
     )
     model.config.use_cache = False
-    accelerator = Accelerator()
-    model = model.to(accelerator.device)
+    # accelerator = Accelerator()
+    # model = model.to(accelerator.device)
 
     if script_args.ignore_bias_buffers:
         # torch distributed hack
@@ -204,8 +210,9 @@ if __name__ == "__main__":
         low_cpu_mem_usage=True,
         torch_dtype=torch.float16,
         load_in_4bit=script_args.load_in_4bit,
+        device_map=device_map,
     )
-    model_ref = model_ref.to(accelerator.device)
+    # model_ref = model_ref.to(accelerator.device)
 
     # tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
     tokenizer = AutoTokenizer.from_pretrained(script_args.model_name_or_path)
@@ -284,6 +291,7 @@ if __name__ == "__main__":
         max_prompt_length=script_args.max_prompt_length,
         max_length=script_args.max_length,
     )
+    print_trainable_parameters(dpo_trainer.model)
 
     # 6. train
     dpo_trainer.train()
@@ -292,3 +300,4 @@ if __name__ == "__main__":
     # 7. save
     output_dir = os.path.join(script_args.output_dir, "final_checkpoint")
     dpo_trainer.model.save_pretrained(output_dir)
+

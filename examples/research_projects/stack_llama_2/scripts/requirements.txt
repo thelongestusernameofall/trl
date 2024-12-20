@@ -5,4 +5,5 @@ datasets
 bitsandbytes
 wandb
 scipy
+tyro
 #trl
