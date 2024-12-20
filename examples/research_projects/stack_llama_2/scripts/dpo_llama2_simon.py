@@ -193,7 +193,7 @@ if __name__ == "__main__":
         low_cpu_mem_usage=True,
         torch_dtype=torch.float16,
         load_in_4bit=script_args.load_in_4bit,
-        device_map=device_map,
+        # device_map=device_map,
     )
     model.config.use_cache = False
     # accelerator = Accelerator()
@@ -210,7 +210,7 @@ if __name__ == "__main__":
         low_cpu_mem_usage=True,
         torch_dtype=torch.float16,
         load_in_4bit=script_args.load_in_4bit,
-        device_map=device_map,
+        # device_map=device_map,
     )
     # model_ref = model_ref.to(accelerator.device)
 
