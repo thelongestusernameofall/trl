@@ -19,7 +19,7 @@ import pandas as pd
 import torch
 from accelerate import Accelerator
 from accelerate.state import AcceleratorState
-from accelerate.utils import gather_object, is_comet_ml_available, is_deepspeed_available, is_wandb_available
+from accelerate.utils import gather_object, is_deepspeed_available
 from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
@@ -34,6 +34,7 @@ from transformers import (
     TrainerState,
     TrainingArguments,
 )
+from transformers.integrations import WandbCallback
 from transformers.trainer_utils import has_length
 
 from ..data_utils import maybe_apply_chat_template
@@ -46,12 +47,6 @@ from .utils import log_table_to_comet_experiment
 
 if is_deepspeed_available():
     import deepspeed
-
-if is_comet_ml_available():
-    pass
-
-if is_wandb_available():
-    import wandb
 
 
 def _generate_completions(
@@ -411,9 +406,9 @@ class WinRateCallback(TrainerCallback):
                 )
 
 
-class LogCompletionsCallback(TrainerCallback):
+class LogCompletionsCallback(WandbCallback):
     r"""
-    A [`~transformers.TrainerCallback`] that logs completions to Weights & Biases and/or Comet.
+    A [`~transformers.TrainerCallback`] that logs completions to Weights & Biases.
 
     Usage:
     ```python
@@ -441,6 +436,7 @@ class LogCompletionsCallback(TrainerCallback):
         num_prompts: Optional[int] = None,
         freq: Optional[int] = None,
     ):
+        super().__init__()
         self.trainer = trainer
         self.generation_config = generation_config
         self.freq = freq
@@ -487,16 +483,8 @@ class LogCompletionsCallback(TrainerCallback):
             global_step = [str(state.global_step)] * len(prompts)
             data = list(zip(global_step, prompts, completions))
             self.table.extend(data)
-            table = pd.DataFrame(columns=["step", "prompt", "completion"], data=self.table)
-
-            if "wandb" in args.report_to:
-                wandb.log({"completions": table})
-
-            if "comet_ml" in args.report_to:
-                log_table_to_comet_experiment(
-                    name="completions.csv",
-                    table=table,
-                )
+            table = self._wandb.Table(columns=["step", "prompt", "completion"], data=self.table)
+            self._wandb.log({"completions": table})
 
         # Save the last logged step, so we don't log the same completions multiple times
         self._last_logged_step = state.global_step

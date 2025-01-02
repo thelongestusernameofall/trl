@@ -47,7 +47,6 @@ from .utils import (
     RewardDataCollatorWithPadding,
     compute_accuracy,
     decode_and_strip_padding,
-    disable_dropout_in_model,
     generate_model_card,
     get_comet_experiment_url,
     log_table_to_comet_experiment,
@@ -169,10 +168,6 @@ class RewardTrainer(Trainer):
                     model = prepare_model_for_kbit_training(model, **prepare_model_kwargs)
 
                 model = get_peft_model(model, peft_config)
-
-        # Disable dropout in the model
-        if args.disable_dropout:
-            disable_dropout_in_model(model)
 
         if compute_metrics is None:
             compute_metrics = compute_accuracy
